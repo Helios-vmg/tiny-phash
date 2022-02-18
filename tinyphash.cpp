@@ -102,6 +102,37 @@ std::vector<float> shrink_to_square(const std::vector<float> &image, unsigned si
 	return ret;
 }
 
+std::vector<float> smear_and_shrink(const std::uint8_t *bitmap, ssize_t width, ssize_t height, ssize_t smear_radius, ssize_t square){
+	std::vector<float> ret(square * square);
+	for (unsigned y = 0; y < square; y++){
+		auto dst_row = ret.data() + y * square;
+		for (unsigned x = 0; x < square; x++){
+			auto x1 = width * x / square;
+			auto y1 = height * y / square;
+		
+			float accum = 0;
+			for (auto i = -smear_radius; i <= smear_radius; i++){
+				auto y2 = (ssize_t)y1 + i;
+				if (y2 < 0)
+					y2 = 0;
+				else if (y2 >= height)
+					y2 = width - 1;
+				auto src_row = bitmap + y2 * width;
+				for (auto j = -smear_radius; j <= smear_radius; j++){
+					auto x2 = (ssize_t)x1 + j;
+					if (x2 < 0)
+						x2 = 0;
+					else if (x2 >= width)
+						x2 = width - 1;
+					accum += (float)src_row[x2];
+				}
+			}
+			dst_row[x] = accum;
+		}
+	}
+	return ret;
+}
+
 std::pair<std::vector<float>, std::vector<float>> get_dct_matrix(size_t n){
     std::vector<float> ret(n * n, 1 / sqrt((float)n));
 	auto ret_transpose = ret;
@@ -133,23 +164,31 @@ void matrix_multiplication(std::vector<float> &dst, const std::vector<float> &le
 }
 
 std::uint64_t tinyph_dct_imagehash(const void *void_bitmap, unsigned width, unsigned height){
-	std::vector<float> temp(width * height);
-	std::copy((const std::uint8_t *)void_bitmap, (const std::uint8_t *)void_bitmap + temp.size(), temp.begin());
-
-	//Approximate 7x7 blur. This is essentially a low-pass filter.
-	//Smear in one dimension then in the other.
-	{
-		std::vector<float> temp2(width * height);
-		smear(temp2.data(), temp .data(), width , height,     1, width, 3);
-		smear(temp .data(), temp2.data(), height, width , width,     1, 3);
-	}
-
 	const size_t square = 32;
 	const size_t crop = 8;
+	const ssize_t smear_radius = 3;
+	const ssize_t smear_diameter = smear_radius * 2 + 1;
 	static_assert(crop < square);
 	static_assert(crop * crop % 2 == 0);
 	
-	temp = shrink_to_square(temp, square, width, height);
+	std::vector<float> temp;
+	
+	if (width >= square * smear_diameter && height >= square * smear_diameter){
+		temp = smear_and_shrink((const std::uint8_t *)void_bitmap, width, height, smear_radius, square);
+	}else{
+		temp.resize(width * height);
+		std::copy((const std::uint8_t *)void_bitmap, (const std::uint8_t *)void_bitmap + temp.size(), temp.begin());
+
+		//Approximate 7x7 blur. This is essentially a low-pass filter.
+		//Smear in one dimension then in the other.
+		{
+			std::vector<float> temp2(width * height);
+			smear(temp2.data(), temp .data(), width , height,     1, width, smear_radius);
+			smear(temp .data(), temp2.data(), height, width , width,     1, smear_radius);
+		}
+
+		temp = shrink_to_square(temp, square, width, height);
+	}
 
 	//Compute the discrete cosine transform of temp.
 	{
