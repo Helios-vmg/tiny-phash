@@ -10,6 +10,14 @@
 
 typedef typename std::make_signed<size_t>::type ssize_t;
 
+const size_t square = 32;
+const size_t crop = 8;
+const ssize_t smear_radius = 3;
+const ssize_t smear_diameter = smear_radius * 2 + 1;
+static_assert(crop < square);
+static_assert(crop * crop % 2 == 0);
+
+
 #ifdef HAVE_FREEIMAGE
 #include <FreeImage.h>
 struct BitmapReleaser{
@@ -71,7 +79,9 @@ std::tuple<std::vector<std::uint8_t>, unsigned, unsigned> load_image_as_luma(con
 }
 #endif
 
-void smear(float *dst, const float *src, ssize_t width, ssize_t height, ssize_t stride, ssize_t pitch, ssize_t smear_radius){
+namespace {
+
+void box_blur(float *dst, const float *src, ssize_t width, ssize_t height, ssize_t stride, ssize_t pitch, ssize_t smear_radius){
 	for (ssize_t y = 0; y < height; y++){
 		auto src_row = src + y * pitch;
 		auto dst_row = dst + y * pitch;
@@ -133,21 +143,6 @@ std::vector<float> smear_and_shrink(const std::uint8_t *bitmap, ssize_t width, s
 	return ret;
 }
 
-std::pair<std::vector<float>, std::vector<float>> get_dct_matrix(size_t n){
-    std::vector<float> ret(n * n, 1 / sqrt((float)n));
-	auto ret_transpose = ret;
-    auto c1 = (float)sqrt(2.0 / n);
-	auto m = (M_PI / 2 / n);
-	for (size_t y = 1; y < n; y++){
-		auto p = &ret[y * n];
-		for (size_t x = 0; x < n; x++){
-			auto v = c1 * (float)cos(m * y * (double)(2 * x + 1));
-			ret_transpose[y + x * n] = *(p++) = v;
-		}
-	}
-	return {ret, ret_transpose};
-}
-
 void matrix_multiplication(std::vector<float> &dst, const std::vector<float> &left, const std::vector<float> &right, size_t size){
 	assert(left.size() == right.size());
 	assert(left.size() == dst.size());
@@ -163,39 +158,50 @@ void matrix_multiplication(std::vector<float> &dst, const std::vector<float> &le
 	}
 }
 
-std::uint64_t tinyph_dct_imagehash(const void *void_bitmap, unsigned width, unsigned height){
-	const size_t square = 32;
-	const size_t crop = 8;
-	const ssize_t smear_radius = 3;
-	const ssize_t smear_diameter = smear_radius * 2 + 1;
-	static_assert(crop < square);
-	static_assert(crop * crop % 2 == 0);
-	
+}
+
+TinyPHash::TinyPHash(){
+	this->matrix.resize(square * square, 1 / sqrt((float)square));
+	this->matrix_transpose = this->matrix;
+    auto c1 = (float)sqrt(2.0 / square);
+	auto m = (M_PI / 2 / square);
+	for (size_t y = 1; y < square; y++){
+		auto p = &this->matrix[y * square];
+		for (size_t x = 0; x < square; x++){
+			auto v = c1 * (float)cos(m * y * (double)(2 * x + 1));
+			this->matrix_transpose[y + x * square] = *(p++) = v;
+		}
+	}
+}
+
+std::uint64_t TinyPHash::dct_imagehash(const void *void_bitmap, unsigned width, unsigned height) const{
 	std::vector<float> temp;
+	auto bitmap = (const std::uint8_t *)void_bitmap;
 	
 	if (width >= square * smear_diameter && height >= square * smear_diameter){
-		temp = smear_and_shrink((const std::uint8_t *)void_bitmap, width, height, smear_radius, square);
+		//When the image is at least 224 pixels in both dimensions, the values of the
+		//pixels in the shrunken image are affected only by the pixels in a 7x7 square
+		//around the pixel in the original image, so it is not necessary to blur most
+		//of the images. This optimization means the function can be made to take O(1)
+		//time over the size of the bitmap.
+		temp = smear_and_shrink(bitmap, width, height, smear_radius, square);
 	}else{
 		temp.resize(width * height);
-		std::copy((const std::uint8_t *)void_bitmap, (const std::uint8_t *)void_bitmap + temp.size(), temp.begin());
+		std::copy(bitmap, bitmap + temp.size(), temp.begin());
 
-		//Approximate 7x7 blur. This is essentially a low-pass filter.
-		//Smear in one dimension then in the other.
-		{
-			std::vector<float> temp2(width * height);
-			smear(temp2.data(), temp .data(), width , height,     1, width, smear_radius);
-			smear(temp .data(), temp2.data(), height, width , width,     1, smear_radius);
-		}
+		//7x7 box blur. Blur in one dimension then in the other.
+		std::vector<float> temp2(width * height);
+		box_blur(temp2.data(), temp .data(), width , height,     1, width, smear_radius);
+		box_blur(temp .data(), temp2.data(), height, width , width,     1, smear_radius);
 
 		temp = shrink_to_square(temp, square, width, height);
 	}
 
 	//Compute the discrete cosine transform of temp.
 	{
-		auto [mat, mat_transpose] = get_dct_matrix(square);
 		std::vector<float> temp2(square * square);
-		matrix_multiplication(temp2, mat, temp, square);
-		matrix_multiplication(temp, temp2, mat_transpose, square);
+		matrix_multiplication(temp2, this->matrix, temp                  , square);
+		matrix_multiplication(temp , temp2       , this->matrix_transpose, square);
 	}
 
 	//Eliminate the very lowest and the high frequencies.
@@ -224,6 +230,29 @@ std::uint64_t tinyph_dct_imagehash(const void *void_bitmap, unsigned width, unsi
 	}
 	
 	return ret;
+}
+
+std::uint64_t tinyph_dct_imagehash(const void *void_bitmap, unsigned width, unsigned height){
+	return TinyPHash().dct_imagehash(void_bitmap, width, height);
+}
+
+extern "C" void *allocate_tinyphash(){
+	return new TinyPHash();
+}
+
+extern "C" int tinyph_dct_imagehash_iterated(
+			uint64_t *hash,
+			const void *tinyphash,
+			const void *bitmap,
+			unsigned width,
+			unsigned height
+		){
+	try{
+		*hash = static_cast<const TinyPHash *>(tinyphash)->dct_imagehash(bitmap, width, height);
+	}catch (std::bad_alloc &){
+		return 0;
+	}
+	return 1;
 }
 
 extern "C" int tinyph_dct_imagehash(uint64_t *hash, const void *bitmap, unsigned width, unsigned height){

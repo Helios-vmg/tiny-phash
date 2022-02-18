@@ -9,6 +9,24 @@
 
 std::tuple<std::vector<std::uint8_t>, unsigned, unsigned> load_image_as_luma(const char *path);
 #endif
+
+class TinyPHash{
+	std::vector<float> matrix;
+	std::vector<float> matrix_transpose;
+public:
+	TinyPHash();
+	TinyPHash(const TinyPHash &) = default;
+	TinyPHash &operator=(const TinyPHash &) = default;
+	TinyPHash(TinyPHash &&other){
+		*this = std::move(other);
+	}
+	TinyPHash &operator=(TinyPHash &&other){
+		this->matrix = std::move(other.matrix);
+		this->matrix_transpose = std::move(other.matrix_transpose);
+	}
+	std::uint64_t dct_imagehash(const void *bitmap, unsigned width, unsigned height) const;
+};
+
 std::uint64_t tinyph_dct_imagehash(const void *bitmap, unsigned width, unsigned height);
 
 #define EXTERN_C extern "C"
@@ -18,5 +36,18 @@ std::uint64_t tinyph_dct_imagehash(const void *bitmap, unsigned width, unsigned 
 #define EXTERN_C
 #endif
 
-EXTERN_C int tinyph_dct_imagehash(uint64_t *hash, const void *bitmap, unsigned width, unsigned height);
+EXTERN_C void *allocate_tinyphash();
+EXTERN_C int tinyph_dct_imagehash_iterated(
+	uint64_t *hash,
+	const void *tinyphash,
+	const void *bitmap,
+	unsigned width,
+	unsigned height
+);
+EXTERN_C int tinyph_dct_imagehash(
+	uint64_t *hash,
+	const void *bitmap,
+	unsigned width,
+	unsigned height
+);
 EXTERN_C int tinyph_hamming_distance(uint64_t, uint64_t);
