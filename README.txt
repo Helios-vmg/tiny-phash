@@ -50,17 +50,34 @@ How to use:
         return (u8)luma;
     }
     
-    pHash and CImg don't really support images with alpha channels. The
-    following method is suggested to bake the alpha channel into the color
-    channels, prior to computing the luma (beware of overflows in the
-    multiplication):
+    pHash and CImg don't really support images with alpha channels. This
+    alternative method is suggested to support RGBA images:
     
-    r = r * a / 255;
-    g = g * a / 255;
-    b = b * a / 255;
-    
-    This is less than ideal, as images where the color channels are completely
-    black and the information is conveyed on the alpha channel cannot be
-    compared. A new algorithm would be needed to compare such images.
-    
+    //Computes luma according to BT. 709
+    u8 compute_luma(u8 r, u8 g, u8 bm u8 a){
+        u32 R = r;
+        u32 G = g;
+        u32 B = b;
+        u32 A = a;
+        R *= 2126;
+        G *= 7152;
+        B *=  722;
+        //premultiplied_luma is equivalent to getting the luma of the
+        //premultiplied RGB values, but saves two multiplications. The rationale
+        //for doing this is that it treats less opaque pixels as closer to
+        //black.
+        auto premultiplied_luma = (R + G + B) * A / 2'550'000;
+        //Get the average of the luma and the alpha. Ideally we would want to
+        //simply add them, but we're working with bytes, not floats. Adding them
+        //causes the alpha to appear in the signal, so when we take the DCT we
+        //won't ignore the alpha channel. This is important for images where
+        //most of the information is in the alpha channel. Note that taking the
+        //average is equivalent to doing premultiplied_luma * 0.5 + A * 0.5. An
+        //open question is whether both coefficients should be 0.5, or if
+        //there's a better choice of coefficients.
+        auto average = (premultiplied_luma + A) / 2;
+        //Note: no range checks are needed for this cast.
+        return (u8)average;
+    }
+
 [2] https://en.wikipedia.org/wiki/Row-_and_column-major_order
