@@ -17,13 +17,8 @@ public:
 	TinyPHash();
 	TinyPHash(const TinyPHash &) = default;
 	TinyPHash &operator=(const TinyPHash &) = default;
-	TinyPHash(TinyPHash &&other){
-		*this = std::move(other);
-	}
-	TinyPHash &operator=(TinyPHash &&other){
-		this->matrix = std::move(other.matrix);
-		this->matrix_transpose = std::move(other.matrix_transpose);
-	}
+	TinyPHash(TinyPHash &&other) = default;
+	TinyPHash &operator=(TinyPHash &&other) = default;
 	std::uint64_t dct_imagehash(const void *bitmap, unsigned width, unsigned height) const;
 };
 
