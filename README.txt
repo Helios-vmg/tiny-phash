@@ -54,7 +54,7 @@ How to use:
     alternative method is suggested to support RGBA images:
     
     //Computes luma according to BT. 709
-    u8 compute_luma(u8 r, u8 g, u8 bm u8 a){
+    u8 compute_luma(u8 r, u8 g, u8 b, u8 a){
         u32 R = r;
         u32 G = g;
         u32 B = b;
